@@ -36,14 +36,39 @@ class PlannerOutput(BaseModel):
     )
 
 
+class VerificationOutput(BaseModel):
+    """Structured verification of the latest assistant answer."""
+
+    is_correct: bool = Field(
+        description="True if the latest AI answer is correct and addresses the user request."
+    )
+    feedback: str = Field(
+        description=(
+            "Short feedback for how to fix the answer when incorrect. "
+            "Use an empty string when the answer is correct."
+        )
+    )
+
+
 class GraphState(TypedDict):
     messages: list[BaseMessage]
     intent: NotRequired[Literal["weather", "general"]]
+    attempts: NotRequired[int]
+    max_attempts: NotRequired[int]
+    is_correct: NotRequired[bool]
+    verification_feedback: NotRequired[str]
 
 
 def _last_human_text(state: GraphState) -> str:
     for m in reversed(state["messages"]):
         if isinstance(m, HumanMessage):
+            return str(m.content)
+    return ""
+
+
+def _last_ai_text(state: GraphState) -> str:
+    for m in reversed(state["messages"]):
+        if isinstance(m, AIMessage):
             return str(m.content)
     return ""
 
@@ -75,11 +100,21 @@ def _route_after_planner(state: GraphState) -> Literal["weather_agent", "chitcha
     return "weather_agent" if state.get("intent") == "weather" else "chitchat"
 
 
-def _route_after_llm(state: GraphState) -> Literal["tools", "end"]:
+def _route_after_llm(state: GraphState) -> Literal["tools", "verify"]:
     last = state["messages"][-1]
     if isinstance(last, AIMessage) and last.tool_calls:
         return "tools"
-    return "end"
+    return "verify"
+
+
+def _route_after_verification(state: GraphState) -> Literal["repair", "end"]:
+    if state.get("is_correct", False):
+        return "end"
+    attempts = state.get("attempts", 0)
+    max_attempts = state.get("max_attempts", 2)
+    if attempts >= max_attempts:
+        return "end"
+    return "repair"
 
 
 def _weather_agent_node(state: GraphState) -> GraphState:
@@ -115,12 +150,74 @@ def _tools_node(state: GraphState) -> GraphState:
     return {"messages": state["messages"] + out}
 
 
+def _verify_answer_node(state: GraphState) -> dict[str, Any]:
+    user_text = _last_human_text(state)
+    ai_text = _last_ai_text(state)
+    tool_observations = [
+        str(m.content) for m in state["messages"] if isinstance(m, ToolMessage)
+    ]
+
+    if not ai_text.strip():
+        return {
+            "is_correct": False,
+            "verification_feedback": "No assistant answer to verify.",
+        }
+
+    verifier = ChatAnthropic(model="claude-sonnet-4-6", temperature=0).with_structured_output(
+        VerificationOutput
+    )
+    verification = verifier.invoke(
+        [
+            HumanMessage(
+                content=(
+                    "You are validating an assistant answer.\n"
+                    "Return is_correct=true only if the answer is accurate and fully addresses the user.\n"
+                    "If any tool results are provided, ensure the answer matches them.\n"
+                    "If incorrect, provide concise actionable feedback.\n\n"
+                    f"User request:\n{user_text}\n\n"
+                    f"Assistant answer:\n{ai_text}\n\n"
+                    "Tool observations:\n"
+                    + ("\n".join(f"- {obs}" for obs in tool_observations) or "- (none)")
+                )
+            )
+        ]
+    )
+    return {
+        "is_correct": verification.is_correct,
+        "verification_feedback": verification.feedback,
+    }
+
+
+def _repair_answer_node(state: GraphState) -> dict[str, Any]:
+    user_text = _last_human_text(state)
+    ai_text = _last_ai_text(state)
+    feedback = state.get("verification_feedback", "")
+    attempts = state.get("attempts", 0) + 1
+    repair_llm = ChatAnthropic(model="claude-sonnet-4-6", temperature=0)
+    repaired_msg = repair_llm.invoke(
+        [
+            HumanMessage(
+                content=(
+                    "Rewrite the assistant answer so it is correct and directly addresses the user.\n"
+                    "Incorporate the verifier feedback.\n\n"
+                    f"User request:\n{user_text}\n\n"
+                    f"Previous assistant answer:\n{ai_text}\n\n"
+                    f"Verifier feedback:\n{feedback}"
+                )
+            )
+        ]
+    )
+    return {"messages": state["messages"] + [repaired_msg], "attempts": attempts}
+
+
 def build_graph():
     g = StateGraph(GraphState)
     g.add_node("planner", _planner_node)
     g.add_node("weather_agent", _weather_agent_node)
     g.add_node("tools", _tools_node)
     g.add_node("chitchat", _chitchat_node)
+    g.add_node("verify", _verify_answer_node)
+    g.add_node("repair", _repair_answer_node)
 
     g.add_edge(START, "planner")
     g.add_conditional_edges(
@@ -131,10 +228,16 @@ def build_graph():
     g.add_conditional_edges(
         "weather_agent",
         _route_after_llm,
-        {"tools": "tools", "end": END},
+        {"tools": "tools", "verify": "verify"},
     )
     g.add_edge("tools", "weather_agent")
-    g.add_edge("chitchat", END)
+    g.add_edge("chitchat", "verify")
+    g.add_conditional_edges(
+        "verify",
+        _route_after_verification,
+        {"repair": "repair", "end": END},
+    )
+    g.add_edge("repair", "verify")
 
     return g.compile()
 
@@ -143,7 +246,11 @@ def main() -> None:
     graph = build_graph()
     # Try also: "Just say hi in one friendly sentence — no weather."
     question = "What's the weather like in San Francisco and Tokyo?"
-    initial_state: GraphState = {"messages": [HumanMessage(content=question)]}
+    initial_state: GraphState = {
+        "messages": [HumanMessage(content=question)],
+        "attempts": 0,
+        "max_attempts": 2,
+    }
 
     # Makes LangSmith grouping explicit in one trace (still needs LANGSMITH_* / LANGCHAIN_* env).
     with tracing_v2_enabled():
@@ -151,6 +258,8 @@ def main() -> None:
 
     print("\n--- ROUTING ---")
     print("intent:", final_state.get("intent", "(missing)"))
+    print("verified:", final_state.get("is_correct", "(missing)"))
+    print("attempts:", final_state.get("attempts", 0))
     print("\n--- FINAL MESSAGES ---")
     for m in final_state["messages"]:
         if isinstance(m, HumanMessage):
