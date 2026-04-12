@@ -129,6 +129,10 @@ For weather questions, the model may call `get_weather`, which returns mock weat
 ```text
 .
 ├── weather_assistant/
+│   ├── adapters/
+│   │   ├── ai/
+│   │   ├── graph/
+│   │   └── tools/
 │   ├── application/
 │   ├── domain/
 │   └── ports/
@@ -139,11 +143,8 @@ For weather questions, the model may call `get_weather`, which returns mock weat
     └── test_graph_loop.py
 ```
 
-The current script still runs as the entry point, while shared domain policy/state logic has
-started moving into `weather_assistant/` to support incremental migration to a cleaner
-application architecture.
-
-Step 2 of this migration now extracts Anthropic-specific planner/verifier/repair behavior into
-`weather_assistant.adapters.ai.AnthropicAssistantAIService`, leaving graph nodes thinner and easier
-to swap with future API/microservice adapters.
+The root script is now a thin CLI entrypoint. Graph construction lives in
+`weather_assistant.adapters.graph.LangGraphWeatherWorkflow`, and Anthropic-specific AI behavior
+lives in `weather_assistant.adapters.ai.AnthropicAssistantAIService`. This split keeps orchestration
+separate from model-specific logic and prepares the codebase for an API/microservice transition.
 
