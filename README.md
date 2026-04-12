@@ -128,8 +128,18 @@ For weather questions, the model may call `get_weather`, which returns mock weat
 
 ```text
 .
+├── weather_assistant/
+│   ├── application/
+│   ├── domain/
+│   └── ports/
 ├── langgraph_langsmith_quickstart.py
 ├── requirements.txt
-└── README.md
+└── tests/
+    ├── test_domain_policies.py
+    └── test_graph_loop.py
 ```
+
+The current script still runs as the entry point, while shared domain policy/state logic has
+started moving into `weather_assistant/` to support incremental migration to a cleaner
+application architecture.
 

@@ -1,5 +1,5 @@
 import os
-from typing import Any, Literal, NotRequired, TypedDict
+from typing import Any, Literal
 
 from dotenv import load_dotenv
 from langchain_anthropic import ChatAnthropic
@@ -8,6 +8,15 @@ from langchain_core.tools import tool
 from langchain_core.tracers.context import tracing_v2_enabled
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field
+from weather_assistant.application.use_cases import with_default_attempt_limits
+from weather_assistant.domain.models import GraphState, Intent
+from weather_assistant.domain.policies import (
+    WEATHER_ONLY_REFUSAL_TEXT,
+    WEATHER_ONLY_REPAIR_PROMPT,
+    WEATHER_ONLY_SYSTEM_PROMPT,
+    route_after_planner as policy_route_after_planner,
+    route_after_verification as policy_route_after_verification,
+)
 
 # Load .env from this directory reliably (works under debugpy too).
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), ".env"))
@@ -28,7 +37,7 @@ def get_weather(city: str) -> str:
 class PlannerOutput(BaseModel):
     """Structured plan: which branch of the graph should run."""
 
-    intent: Literal["weather", "out_of_scope"] = Field(
+    intent: Intent = Field(
         description=(
             '"weather" if the user asks about weather/temperature/forecast in a place; '
             '"out_of_scope" for any request that is not weather-related.'
@@ -48,15 +57,6 @@ class VerificationOutput(BaseModel):
             "Use an empty string when the answer is correct."
         )
     )
-
-
-class GraphState(TypedDict):
-    messages: list[BaseMessage]
-    intent: NotRequired[Literal["weather", "out_of_scope"]]
-    attempts: NotRequired[int]
-    max_attempts: NotRequired[int]
-    is_correct: NotRequired[bool]
-    verification_feedback: NotRequired[str]
 
 
 def _last_human_text(state: GraphState) -> str:
@@ -97,7 +97,7 @@ def _planner_node(state: GraphState) -> dict[str, Any]:
 
 
 def _route_after_planner(state: GraphState) -> Literal["weather_agent", "out_of_scope"]:
-    return "weather_agent" if state.get("intent") == "weather" else "out_of_scope"
+    return policy_route_after_planner(state.get("intent"))
 
 
 def _route_after_llm(state: GraphState) -> Literal["tools", "verify"]:
@@ -108,32 +108,22 @@ def _route_after_llm(state: GraphState) -> Literal["tools", "verify"]:
 
 
 def _route_after_verification(state: GraphState) -> Literal["repair", "end"]:
-    if state.get("is_correct", False):
-        return "end"
-    attempts = state.get("attempts", 0)
-    max_attempts = state.get("max_attempts", 2)
-    if attempts >= max_attempts:
-        return "end"
-    return "repair"
+    return policy_route_after_verification(
+        is_correct=state.get("is_correct", False),
+        attempts=state.get("attempts", 0),
+        max_attempts=state.get("max_attempts", 2),
+    )
 
 
 def _weather_agent_node(state: GraphState) -> GraphState:
-    guardrail = SystemMessage(
-        content=(
-            "You are a weather-only assistant. Answer only weather-related questions. "
-            "If the user asks about anything else, respond exactly with: "
-            "'I can only help with weather questions. Ask me about the weather in a city.'"
-        )
-    )
+    guardrail = SystemMessage(content=WEATHER_ONLY_SYSTEM_PROMPT)
     llm = ChatAnthropic(model="claude-sonnet-4-6", temperature=0).bind_tools([get_weather])
     msg = llm.invoke([guardrail] + state["messages"])
     return {"messages": state["messages"] + [msg]}
 
 
 def _out_of_scope_node(state: GraphState) -> GraphState:
-    refusal = AIMessage(
-        content="I can only help with weather questions. Ask me about the weather in a city."
-    )
+    refusal = AIMessage(content=WEATHER_ONLY_REFUSAL_TEXT)
     return {
         "messages": state["messages"] + [refusal],
         "is_correct": True,
@@ -209,10 +199,7 @@ def _repair_answer_node(state: GraphState) -> dict[str, Any]:
     repaired_msg = repair_llm.invoke(
         [
             SystemMessage(
-                content=(
-                    "You are a weather-only assistant. Provide only weather-related answers "
-                    "and stay grounded in available tool outputs."
-                )
+                content=WEATHER_ONLY_REPAIR_PROMPT
             ),
             HumanMessage(
                 content=(
@@ -264,11 +251,9 @@ def main() -> None:
     graph = build_graph()
     # Try also: "Just say hi in one friendly sentence."
     question = "What's the weather like in San Francisco and Tokyo?"
-    initial_state: GraphState = {
-        "messages": [HumanMessage(content=question)],
-        "attempts": 0,
-        "max_attempts": 2,
-    }
+    initial_state: GraphState = with_default_attempt_limits(
+        {"messages": [HumanMessage(content=question)]}
+    )
 
     # Makes LangSmith grouping explicit in one trace (still needs LANGSMITH_* / LANGCHAIN_* env).
     with tracing_v2_enabled():
