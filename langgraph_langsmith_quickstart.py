@@ -4,22 +4,22 @@ from dotenv import load_dotenv
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tracers.context import tracing_v2_enabled
 
-from weather_assistant.adapters.ai import AnthropicAssistantAIService
-from weather_assistant.adapters.graph import LangGraphWeatherWorkflow
-from weather_assistant.adapters.tools import get_weather
 from weather_assistant.application.use_cases import with_default_attempt_limits
+from weather_assistant.composition import build_default_container
 from weather_assistant.domain.models import GraphState
 
 # Load .env from this directory reliably (works under debugpy too).
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), ".env"))
 
+
 def main() -> None:
-    assistant = AnthropicAssistantAIService()
-    graph = LangGraphWeatherWorkflow(assistant=assistant, tools=[get_weather]).build()
+    container = build_default_container()
+    graph = container.build_graph()
     # Try also: "Just say hi in one friendly sentence."
     question = "What's the weather like in San Francisco and Tokyo?"
     initial_state: GraphState = with_default_attempt_limits(
-        {"messages": [HumanMessage(content=question)]}
+        {"messages": [HumanMessage(content=question)]},
+        default_max_attempts=container.settings.default_max_attempts,
     )
 
     # Makes LangSmith grouping explicit in one trace (still needs LANGSMITH_* / LANGCHAIN_* env).

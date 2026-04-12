@@ -85,6 +85,10 @@ LANGCHAIN_PROJECT=langgraph-langsmith-quickstart
 Notes:
 - The script loads `.env` from the same directory as the script file.
 - LangSmith tracing context is enabled in code (`with tracing_v2_enabled():`), so tracing-related env vars should be set if you want traces recorded.
+- Optional runtime tuning via environment variables:
+  - `WEATHER_ASSISTANT_MODEL` (default: `claude-sonnet-4-6`)
+  - `WEATHER_ASSISTANT_TEMPERATURE` (default: `0.0`)
+  - `WEATHER_ASSISTANT_MAX_ATTEMPTS` (default: `2`)
 
 ## Run
 
@@ -134,17 +138,21 @@ For weather questions, the model may call `get_weather`, which returns mock weat
 │   │   ├── graph/
 │   │   └── tools/
 │   ├── application/
+│   ├── composition/
+│   ├── config/
 │   ├── domain/
 │   └── ports/
 ├── langgraph_langsmith_quickstart.py
 ├── requirements.txt
 └── tests/
+    ├── test_composition_container.py
     ├── test_domain_policies.py
     └── test_graph_loop.py
 ```
 
 The root script is now a thin CLI entrypoint. Graph construction lives in
-`weather_assistant.adapters.graph.LangGraphWeatherWorkflow`, and Anthropic-specific AI behavior
-lives in `weather_assistant.adapters.ai.AnthropicAssistantAIService`. This split keeps orchestration
-separate from model-specific logic and prepares the codebase for an API/microservice transition.
+`weather_assistant.adapters.graph.LangGraphWeatherWorkflow`, Anthropic-specific AI behavior lives in
+`weather_assistant.adapters.ai.AnthropicAssistantAIService`, and runtime dependency wiring is handled
+by `weather_assistant.composition.AppContainer`. This keeps orchestration, AI implementation, and
+bootstrapping separate and prepares the codebase for an API/microservice transition.
 
