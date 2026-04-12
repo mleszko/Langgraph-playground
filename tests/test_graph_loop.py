@@ -38,8 +38,11 @@ def _patch_graph_nodes(
             msg = AIMessage(content=f"Weather answer attempt {weather_calls['value']}")
         return {"messages": state["messages"] + [msg]}
 
-    def fake_chitchat_node(state: app.GraphState) -> app.GraphState:
-        return {"messages": state["messages"] + [AIMessage(content="Hi there!")]}
+    def fake_out_of_scope_node(state: app.GraphState) -> app.GraphState:
+        return {
+            "messages": state["messages"]
+            + [AIMessage(content="I can only help with weather questions.")]
+        }
 
     def fake_verify_answer_node(_state: app.GraphState) -> dict[str, Any]:
         idx = verify_idx["value"]
@@ -57,7 +60,7 @@ def _patch_graph_nodes(
 
     monkeypatch.setattr(app, "_planner_node", fake_planner_node)
     monkeypatch.setattr(app, "_weather_agent_node", fake_weather_agent_node)
-    monkeypatch.setattr(app, "_chitchat_node", fake_chitchat_node)
+    monkeypatch.setattr(app, "_out_of_scope_node", fake_out_of_scope_node)
     monkeypatch.setattr(app, "_verify_answer_node", fake_verify_answer_node)
     monkeypatch.setattr(app, "_repair_answer_node", fake_repair_answer_node)
 
@@ -113,8 +116,8 @@ def test_graph_stops_when_max_attempts_reached(monkeypatch: Any) -> None:
     assert final_state["attempts"] == 2
 
 
-def test_graph_general_flow_verifies_without_repair(monkeypatch: Any) -> None:
-    _patch_graph_nodes(monkeypatch, intent="general", verify_sequence=[True])
+def test_graph_out_of_scope_flow_ends_without_verification(monkeypatch: Any) -> None:
+    _patch_graph_nodes(monkeypatch, intent="out_of_scope", verify_sequence=[False, False, True])
     graph = app.build_graph()
     initial_state: app.GraphState = {
         "messages": [HumanMessage(content="Hi!")],
@@ -124,6 +127,10 @@ def test_graph_general_flow_verifies_without_repair(monkeypatch: Any) -> None:
 
     final_state = graph.invoke(initial_state)
 
-    assert final_state["intent"] == "general"
-    assert final_state["is_correct"] is True
+    assert final_state["intent"] == "out_of_scope"
     assert final_state["attempts"] == 0
+    assert "is_correct" not in final_state
+    assert any(
+        isinstance(m, AIMessage) and "only help with weather questions" in str(m.content)
+        for m in final_state["messages"]
+    )

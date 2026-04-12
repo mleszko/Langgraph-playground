@@ -3,7 +3,7 @@ from typing import Any, Literal, NotRequired, TypedDict
 
 from dotenv import load_dotenv
 from langchain_anthropic import ChatAnthropic
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import tool
 from langchain_core.tracers.context import tracing_v2_enabled
 from langgraph.graph import END, START, StateGraph
@@ -28,10 +28,10 @@ def get_weather(city: str) -> str:
 class PlannerOutput(BaseModel):
     """Structured plan: which branch of the graph should run."""
 
-    intent: Literal["weather", "general"] = Field(
+    intent: Literal["weather", "out_of_scope"] = Field(
         description=(
             '"weather" if the user asks about weather/temperature/forecast in a place; '
-            '"general" for greetings, small talk, or unrelated topics.'
+            '"out_of_scope" for any request that is not weather-related.'
         )
     )
 
@@ -52,7 +52,7 @@ class VerificationOutput(BaseModel):
 
 class GraphState(TypedDict):
     messages: list[BaseMessage]
-    intent: NotRequired[Literal["weather", "general"]]
+    intent: NotRequired[Literal["weather", "out_of_scope"]]
     attempts: NotRequired[int]
     max_attempts: NotRequired[int]
     is_correct: NotRequired[bool]
@@ -76,7 +76,7 @@ def _last_ai_text(state: GraphState) -> str:
 def _planner_node(state: GraphState) -> dict[str, Any]:
     human_text = _last_human_text(state)
     if not human_text.strip():
-        return {"intent": "general"}
+        return {"intent": "out_of_scope"}
 
     llm = ChatAnthropic(model="claude-sonnet-4-6", temperature=0).with_structured_output(
         PlannerOutput
@@ -87,7 +87,7 @@ def _planner_node(state: GraphState) -> dict[str, Any]:
                 content=(
                     "Classify the user's latest message.\n"
                     '- "weather": about weather, temperature, forecast, or conditions somewhere.\n'
-                    '- "general": anything else.\n\n'
+                    '- "out_of_scope": anything else.\n\n'
                     f"User message:\n{human_text}"
                 )
             )
@@ -96,8 +96,8 @@ def _planner_node(state: GraphState) -> dict[str, Any]:
     return {"intent": plan.intent}
 
 
-def _route_after_planner(state: GraphState) -> Literal["weather_agent", "chitchat"]:
-    return "weather_agent" if state.get("intent") == "weather" else "chitchat"
+def _route_after_planner(state: GraphState) -> Literal["weather_agent", "out_of_scope"]:
+    return "weather_agent" if state.get("intent") == "weather" else "out_of_scope"
 
 
 def _route_after_llm(state: GraphState) -> Literal["tools", "verify"]:
@@ -118,15 +118,27 @@ def _route_after_verification(state: GraphState) -> Literal["repair", "end"]:
 
 
 def _weather_agent_node(state: GraphState) -> GraphState:
+    guardrail = SystemMessage(
+        content=(
+            "You are a weather-only assistant. Answer only weather-related questions. "
+            "If the user asks about anything else, respond exactly with: "
+            "'I can only help with weather questions. Ask me about the weather in a city.'"
+        )
+    )
     llm = ChatAnthropic(model="claude-sonnet-4-6", temperature=0).bind_tools([get_weather])
-    msg = llm.invoke(state["messages"])
+    msg = llm.invoke([guardrail] + state["messages"])
     return {"messages": state["messages"] + [msg]}
 
 
-def _chitchat_node(state: GraphState) -> GraphState:
-    llm = ChatAnthropic(model="claude-sonnet-4-6", temperature=0)
-    msg = llm.invoke(state["messages"])
-    return {"messages": state["messages"] + [msg]}
+def _out_of_scope_node(state: GraphState) -> GraphState:
+    refusal = AIMessage(
+        content="I can only help with weather questions. Ask me about the weather in a city."
+    )
+    return {
+        "messages": state["messages"] + [refusal],
+        "is_correct": True,
+        "verification_feedback": "",
+    }
 
 
 def _tools_node(state: GraphState) -> GraphState:
@@ -196,6 +208,12 @@ def _repair_answer_node(state: GraphState) -> dict[str, Any]:
     repair_llm = ChatAnthropic(model="claude-sonnet-4-6", temperature=0)
     repaired_msg = repair_llm.invoke(
         [
+            SystemMessage(
+                content=(
+                    "You are a weather-only assistant. Provide only weather-related answers "
+                    "and stay grounded in available tool outputs."
+                )
+            ),
             HumanMessage(
                 content=(
                     "Rewrite the assistant answer so it is correct and directly addresses the user.\n"
@@ -215,7 +233,7 @@ def build_graph():
     g.add_node("planner", _planner_node)
     g.add_node("weather_agent", _weather_agent_node)
     g.add_node("tools", _tools_node)
-    g.add_node("chitchat", _chitchat_node)
+    g.add_node("out_of_scope", _out_of_scope_node)
     g.add_node("verify", _verify_answer_node)
     g.add_node("repair", _repair_answer_node)
 
@@ -223,7 +241,7 @@ def build_graph():
     g.add_conditional_edges(
         "planner",
         _route_after_planner,
-        {"weather_agent": "weather_agent", "chitchat": "chitchat"},
+        {"weather_agent": "weather_agent", "out_of_scope": "out_of_scope"},
     )
     g.add_conditional_edges(
         "weather_agent",
@@ -231,7 +249,7 @@ def build_graph():
         {"tools": "tools", "verify": "verify"},
     )
     g.add_edge("tools", "weather_agent")
-    g.add_edge("chitchat", "verify")
+    g.add_edge("out_of_scope", END)
     g.add_conditional_edges(
         "verify",
         _route_after_verification,
@@ -244,7 +262,7 @@ def build_graph():
 
 def main() -> None:
     graph = build_graph()
-    # Try also: "Just say hi in one friendly sentence — no weather."
+    # Try also: "Just say hi in one friendly sentence."
     question = "What's the weather like in San Francisco and Tokyo?"
     initial_state: GraphState = {
         "messages": [HumanMessage(content=question)],
@@ -257,7 +275,7 @@ def main() -> None:
         final_state = graph.invoke(initial_state)
 
     print("\n--- ROUTING ---")
-    print("intent:", final_state.get("intent", "(missing)"))
+    print("intent:", final_state.get("intent", "(missing)"))  # weather or out_of_scope
     print("verified:", final_state.get("is_correct", "(missing)"))
     print("attempts:", final_state.get("attempts", 0))
     print("\n--- FINAL MESSAGES ---")
