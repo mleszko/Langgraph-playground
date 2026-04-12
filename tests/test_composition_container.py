@@ -54,6 +54,7 @@ def test_default_container_uses_provided_settings() -> None:
     assert container.settings == settings
     assert len(container.tools) == 1
     assert container.tools[0].name == "get_weather"
+    assert container.conversation_repository is not None
 
 
 def test_container_build_graph_with_dummy_assistant() -> None:

@@ -114,13 +114,26 @@ Endpoints:
 
 - `GET /health`
 - `POST /chat`
+- `DELETE /conversations/{conversation_id}`
+
+`POST /chat` request body:
+
+- `message` (required)
+- `conversation_id` (optional; if provided, conversation history is reused)
+- `max_attempts` (optional verification retry cap for that request)
 
 Example request:
 
 ```bash
 curl -X POST http://localhost:8000/chat \
   -H "Content-Type: application/json" \
-  -d '{"message":"What is the weather in Tokyo?"}'
+  -d '{"conversation_id":"demo-1","message":"What is the weather in Tokyo?"}'
+```
+
+Delete conversation state:
+
+```bash
+curl -X DELETE http://localhost:8000/conversations/demo-1
 ```
 
 ## Test
@@ -158,6 +171,7 @@ For weather questions, the model may call `get_weather`, which returns mock weat
 │   │   ├── ai/
 │   │   ├── api/
 │   │   ├── graph/
+│   │   ├── repositories/
 │   │   └── tools/
 │   ├── application/
 │   ├── composition/
@@ -170,12 +184,15 @@ For weather questions, the model may call `get_weather`, which returns mock weat
     ├── test_api_app.py
     ├── test_composition_container.py
     ├── test_domain_policies.py
-    └── test_graph_loop.py
+    ├── test_graph_loop.py
+    └── test_in_memory_repository.py
 ```
 
 The root script is now a thin CLI entrypoint. Graph construction lives in
 `weather_assistant.adapters.graph.LangGraphWeatherWorkflow`, Anthropic-specific AI behavior lives in
-`weather_assistant.adapters.ai.AnthropicAssistantAIService`, and runtime dependency wiring is handled
-by `weather_assistant.composition.AppContainer`. This keeps orchestration, AI implementation, and
-bootstrapping separate and prepares the codebase for an API/microservice transition.
+`weather_assistant.adapters.ai.AnthropicAssistantAIService`, HTTP wiring lives in
+`weather_assistant.adapters.api.fastapi_app`, and runtime dependency wiring is handled by
+`weather_assistant.composition.AppContainer`. Conversation state persistence is abstracted through a
+repository port with an in-memory adapter, which keeps storage concerns swappable for a future
+production database in a microservice deployment.
 
