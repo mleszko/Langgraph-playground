@@ -41,6 +41,14 @@ Install dependencies:
 pip install -r requirements.txt
 ```
 
+### Cursor Cloud Agent setup
+
+This repository includes `.cursor/environment.json` so cloud agents automatically run:
+
+```bash
+python3 -m pip install -r requirements.txt
+```
+
 ## Environment Variables
 
 Create a `.env` file in the repository root:
