@@ -102,6 +102,27 @@ By default, the script asks:
 
 You can edit the `question` variable in `main()` to try other inputs.
 
+## Run as API (FastAPI)
+
+Start the HTTP service:
+
+```bash
+uvicorn weather_assistant.adapters.api.fastapi_app:create_app --factory --host 0.0.0.0 --port 8000
+```
+
+Endpoints:
+
+- `GET /health`
+- `POST /chat`
+
+Example request:
+
+```bash
+curl -X POST http://localhost:8000/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message":"What is the weather in Tokyo?"}'
+```
+
 ## Test
 
 ```bash
@@ -135,6 +156,7 @@ For weather questions, the model may call `get_weather`, which returns mock weat
 ├── weather_assistant/
 │   ├── adapters/
 │   │   ├── ai/
+│   │   ├── api/
 │   │   ├── graph/
 │   │   └── tools/
 │   ├── application/
@@ -145,6 +167,7 @@ For weather questions, the model may call `get_weather`, which returns mock weat
 ├── langgraph_langsmith_quickstart.py
 ├── requirements.txt
 └── tests/
+    ├── test_api_app.py
     ├── test_composition_container.py
     ├── test_domain_policies.py
     └── test_graph_loop.py

@@ -1,6 +1,9 @@
 langchain-anthropic
 langchain-core
 langgraph
+fastapi
+httpx
 pydantic
 pytest
 python-dotenv
+uvicorn
