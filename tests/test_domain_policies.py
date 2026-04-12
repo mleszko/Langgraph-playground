@@ -30,6 +30,12 @@ def test_with_default_attempt_limits_keeps_explicit_values() -> None:
     assert state["max_attempts"] == 5
 
 
+def test_with_default_attempt_limits_allows_custom_default() -> None:
+    state = with_default_attempt_limits({"messages": []}, default_max_attempts=4)
+    assert state["attempts"] == 0
+    assert state["max_attempts"] == 4
+
+
 def test_verification_decision_fields() -> None:
     result = VerificationDecision(is_correct=False, feedback="Needs correction")
     assert result.is_correct is False
