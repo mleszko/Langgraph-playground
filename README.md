@@ -18,7 +18,26 @@ It demonstrates a small **LangGraph workflow** that:
    - a weather-capable agent (with tool use), or
    - a general chitchat agent
 3. Uses a simple local tool (`get_weather`) when weather data is requested
-4. Wraps execution with LangSmith tracing (`tracing_v2_enabled`) so runs are visible in LangSmith when configured.
+4. Verifies the generated answer and, if needed, retries with a repair loop
+5. Wraps execution with LangSmith tracing (`tracing_v2_enabled`) so runs are visible in LangSmith when configured.
+
+## Graph Flow (with verification loop)
+
+The graph uses these main nodes:
+
+- `planner`: classifies user intent (`weather` or `general`)
+- `weather_agent`: responds to weather prompts and may call tools
+- `tools`: executes `get_weather` tool calls
+- `chitchat`: handles general conversation
+- `verify`: checks whether the latest AI answer is correct and complete
+- `repair`: rewrites the answer based on verifier feedback when needed
+
+Loop behavior:
+
+- All final answers (weather and general) pass through `verify`.
+- If `verify` marks the answer as correct, the graph ends.
+- If incorrect, the graph routes to `repair`, then back to `verify`.
+- The loop is bounded by `attempts` and `max_attempts` to prevent infinite retries.
 
 ## Prerequisites
 
@@ -89,6 +108,8 @@ pytest
 The script prints:
 
 - Selected route/intent (`weather` or `general`)
+- Verification status (`verified: True/False`)
+- Number of repair attempts used
 - Full message flow (Human, Tool, AI messages)
 
 For weather questions, the model may call `get_weather`, which returns mock weather data for:
