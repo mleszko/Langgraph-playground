@@ -1,5 +1,10 @@
 # LangGraph + LangSmith Quickstart
 
+![Python](https://img.shields.io/badge/Python-3.11%2B-blue)
+![LangGraph](https://img.shields.io/badge/LangGraph-StateGraph-7f52ff)
+![LangSmith](https://img.shields.io/badge/LangSmith-Tracing-0ea5e9)
+![Anthropic](https://img.shields.io/badge/Model-Anthropic-111827)
+
 This repository contains a single Python quickstart script:
 
 - `langgraph_langsmith_quickstart.py`
@@ -17,7 +22,7 @@ It demonstrates a small **LangGraph workflow** that:
 
 ## Prerequisites
 
-- Python 3.10+
+- Python 3.11+
 - An Anthropic API key
 - (Recommended) A LangSmith API key for tracing
 
@@ -33,7 +38,7 @@ source .venv/bin/activate
 Install dependencies:
 
 ```bash
-pip install langgraph langchain-core langchain-anthropic python-dotenv pydantic
+pip install -r requirements.txt
 ```
 
 ## Environment Variables
@@ -84,6 +89,7 @@ For weather questions, the model may call `get_weather`, which returns mock weat
 ```text
 .
 ├── langgraph_langsmith_quickstart.py
+├── requirements.txt
 └── README.md
 ```
 
