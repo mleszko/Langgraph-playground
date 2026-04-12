@@ -2,18 +2,20 @@ import os
 from typing import Any, Literal
 
 from dotenv import load_dotenv
-from langchain_anthropic import ChatAnthropic
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.tools import tool
 from langchain_core.tracers.context import tracing_v2_enabled
 from langgraph.graph import END, START, StateGraph
-from pydantic import BaseModel, Field
+from weather_assistant.adapters.ai import AnthropicAssistantAIService
+from weather_assistant.application.message_utils import (
+    last_ai_text,
+    last_human_text,
+    tool_observations,
+)
 from weather_assistant.application.use_cases import with_default_attempt_limits
-from weather_assistant.domain.models import GraphState, Intent
+from weather_assistant.domain.models import GraphState
 from weather_assistant.domain.policies import (
     WEATHER_ONLY_REFUSAL_TEXT,
-    WEATHER_ONLY_REPAIR_PROMPT,
-    WEATHER_ONLY_SYSTEM_PROMPT,
     route_after_planner as policy_route_after_planner,
     route_after_verification as policy_route_after_verification,
 )
@@ -34,66 +36,11 @@ def get_weather(city: str) -> str:
     return weather_data.get(city, "Weather data not available")
 
 
-class PlannerOutput(BaseModel):
-    """Structured plan: which branch of the graph should run."""
-
-    intent: Intent = Field(
-        description=(
-            '"weather" if the user asks about weather/temperature/forecast in a place; '
-            '"out_of_scope" for any request that is not weather-related.'
-        )
-    )
-
-
-class VerificationOutput(BaseModel):
-    """Structured verification of the latest assistant answer."""
-
-    is_correct: bool = Field(
-        description="True if the latest AI answer is correct and addresses the user request."
-    )
-    feedback: str = Field(
-        description=(
-            "Short feedback for how to fix the answer when incorrect. "
-            "Use an empty string when the answer is correct."
-        )
-    )
-
-
-def _last_human_text(state: GraphState) -> str:
-    for m in reversed(state["messages"]):
-        if isinstance(m, HumanMessage):
-            return str(m.content)
-    return ""
-
-
-def _last_ai_text(state: GraphState) -> str:
-    for m in reversed(state["messages"]):
-        if isinstance(m, AIMessage):
-            return str(m.content)
-    return ""
+_assistant = AnthropicAssistantAIService()
 
 
 def _planner_node(state: GraphState) -> dict[str, Any]:
-    human_text = _last_human_text(state)
-    if not human_text.strip():
-        return {"intent": "out_of_scope"}
-
-    llm = ChatAnthropic(model="claude-sonnet-4-6", temperature=0).with_structured_output(
-        PlannerOutput
-    )
-    plan = llm.invoke(
-        [
-            HumanMessage(
-                content=(
-                    "Classify the user's latest message.\n"
-                    '- "weather": about weather, temperature, forecast, or conditions somewhere.\n'
-                    '- "out_of_scope": anything else.\n\n'
-                    f"User message:\n{human_text}"
-                )
-            )
-        ]
-    )
-    return {"intent": plan.intent}
+    return {"intent": _assistant.classify_intent(last_human_text(state))}
 
 
 def _route_after_planner(state: GraphState) -> Literal["weather_agent", "out_of_scope"]:
@@ -116,9 +63,7 @@ def _route_after_verification(state: GraphState) -> Literal["repair", "end"]:
 
 
 def _weather_agent_node(state: GraphState) -> GraphState:
-    guardrail = SystemMessage(content=WEATHER_ONLY_SYSTEM_PROMPT)
-    llm = ChatAnthropic(model="claude-sonnet-4-6", temperature=0).bind_tools([get_weather])
-    msg = llm.invoke([guardrail] + state["messages"])
+    msg = _assistant.respond_weather(state["messages"], tools=[get_weather])
     return {"messages": state["messages"] + [msg]}
 
 
@@ -153,64 +98,20 @@ def _tools_node(state: GraphState) -> GraphState:
 
 
 def _verify_answer_node(state: GraphState) -> dict[str, Any]:
-    user_text = _last_human_text(state)
-    ai_text = _last_ai_text(state)
-    tool_observations = [
-        str(m.content) for m in state["messages"] if isinstance(m, ToolMessage)
-    ]
-
-    if not ai_text.strip():
-        return {
-            "is_correct": False,
-            "verification_feedback": "No assistant answer to verify.",
-        }
-
-    verifier = ChatAnthropic(model="claude-sonnet-4-6", temperature=0).with_structured_output(
-        VerificationOutput
+    verification = _assistant.verify_answer(
+        user_text=last_human_text(state),
+        ai_text=last_ai_text(state),
+        tool_observations=tool_observations(state),
     )
-    verification = verifier.invoke(
-        [
-            HumanMessage(
-                content=(
-                    "You are validating an assistant answer.\n"
-                    "Return is_correct=true only if the answer is accurate and fully addresses the user.\n"
-                    "If any tool results are provided, ensure the answer matches them.\n"
-                    "If incorrect, provide concise actionable feedback.\n\n"
-                    f"User request:\n{user_text}\n\n"
-                    f"Assistant answer:\n{ai_text}\n\n"
-                    "Tool observations:\n"
-                    + ("\n".join(f"- {obs}" for obs in tool_observations) or "- (none)")
-                )
-            )
-        ]
-    )
-    return {
-        "is_correct": verification.is_correct,
-        "verification_feedback": verification.feedback,
-    }
+    return verification.to_state_update()
 
 
 def _repair_answer_node(state: GraphState) -> dict[str, Any]:
-    user_text = _last_human_text(state)
-    ai_text = _last_ai_text(state)
-    feedback = state.get("verification_feedback", "")
     attempts = state.get("attempts", 0) + 1
-    repair_llm = ChatAnthropic(model="claude-sonnet-4-6", temperature=0)
-    repaired_msg = repair_llm.invoke(
-        [
-            SystemMessage(
-                content=WEATHER_ONLY_REPAIR_PROMPT
-            ),
-            HumanMessage(
-                content=(
-                    "Rewrite the assistant answer so it is correct and directly addresses the user.\n"
-                    "Incorporate the verifier feedback.\n\n"
-                    f"User request:\n{user_text}\n\n"
-                    f"Previous assistant answer:\n{ai_text}\n\n"
-                    f"Verifier feedback:\n{feedback}"
-                )
-            )
-        ]
+    repaired_msg = _assistant.repair_answer(
+        user_text=last_human_text(state),
+        ai_text=last_ai_text(state),
+        feedback=state.get("verification_feedback", ""),
     )
     return {"messages": state["messages"] + [repaired_msg], "attempts": attempts}
 

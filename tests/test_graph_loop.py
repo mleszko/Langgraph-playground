@@ -80,6 +80,30 @@ def test_route_after_llm_to_tools_and_verify() -> None:
     assert app._route_after_llm(plain_answer_state) == "verify"
 
 
+def test_tool_execution_from_weather_assistant_service() -> None:
+    state: app.GraphState = {
+        "messages": [
+            HumanMessage(content="What's the weather?"),
+            AIMessage(
+                content="Calling tool",
+                tool_calls=[
+                    {
+                        "name": "get_weather",
+                        "args": {"city": "San Francisco"},
+                        "id": "call-123",
+                    }
+                ],
+            ),
+        ]
+    }
+
+    new_state = app._tools_node(state)
+
+    assert len(new_state["messages"]) == 3
+    assert isinstance(new_state["messages"][-1], ToolMessage)
+    assert "Foggy, 62" in str(new_state["messages"][-1].content)
+
+
 def test_graph_retries_until_verified(monkeypatch: Any) -> None:
     _patch_graph_nodes(monkeypatch, verify_sequence=[False, True], use_tool_path=True)
     graph = app.build_graph()
