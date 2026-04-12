@@ -143,3 +143,7 @@ The current script still runs as the entry point, while shared domain policy/sta
 started moving into `weather_assistant/` to support incremental migration to a cleaner
 application architecture.
 
+Step 2 of this migration now extracts Anthropic-specific planner/verifier/repair behavior into
+`weather_assistant.adapters.ai.AnthropicAssistantAIService`, leaving graph nodes thinner and easier
+to swap with future API/microservice adapters.
+

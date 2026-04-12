@@ -1,4 +1,5 @@
 from weather_assistant.application.use_cases import with_default_attempt_limits
+from weather_assistant.domain.models import VerificationDecision
 from weather_assistant.domain.policies import (
     route_after_planner,
     route_after_verification,
@@ -27,4 +28,10 @@ def test_with_default_attempt_limits_keeps_explicit_values() -> None:
     state = with_default_attempt_limits({"messages": [], "attempts": 3, "max_attempts": 5})
     assert state["attempts"] == 3
     assert state["max_attempts"] == 5
+
+
+def test_verification_decision_fields() -> None:
+    result = VerificationDecision(is_correct=False, feedback="Needs correction")
+    assert result.is_correct is False
+    assert result.feedback == "Needs correction"
 
