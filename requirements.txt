@@ -2,4 +2,5 @@ langchain-anthropic
 langchain-core
 langgraph
 pydantic
+pytest
 python-dotenv

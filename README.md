@@ -70,6 +70,12 @@ By default, the script asks:
 
 You can edit the `question` variable in `main()` to try other inputs.
 
+## Test
+
+```bash
+pytest
+```
+
 ## What to Expect
 
 The script prints:
