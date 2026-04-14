@@ -7,9 +7,11 @@ from langchain_core.tools import BaseTool
 
 from weather_assistant.adapters.ai import AnthropicAssistantAIService
 from weather_assistant.adapters.graph import LangGraphWeatherWorkflow
+from weather_assistant.adapters.repositories import InMemoryConversationStateRepository
 from weather_assistant.adapters.tools import get_weather
 from weather_assistant.config import WeatherAssistantSettings
 from weather_assistant.ports.assistant import AssistantAIServicePort
+from weather_assistant.ports.repository import ConversationStateRepositoryPort
 
 
 @dataclass
@@ -19,6 +21,9 @@ class AppContainer:
     settings: WeatherAssistantSettings
     assistant: AssistantAIServicePort
     tools: list[BaseTool] = field(default_factory=list)
+    conversation_repository: ConversationStateRepositoryPort = field(
+        default_factory=InMemoryConversationStateRepository
+    )
 
     def build_workflow(self) -> LangGraphWeatherWorkflow:
         """Build graph workflow adapter with injected dependencies."""
@@ -42,6 +47,9 @@ def build_default_container(
     )
     resolved_tools = list(tools) if tools is not None else [get_weather]
     return AppContainer(
-        settings=resolved_settings, assistant=assistant, tools=resolved_tools
+        settings=resolved_settings,
+        assistant=assistant,
+        tools=resolved_tools,
+        conversation_repository=InMemoryConversationStateRepository(),
     )
 

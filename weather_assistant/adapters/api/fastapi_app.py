@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from uuid import uuid4
 from typing import Any
 
 from fastapi import FastAPI
@@ -17,6 +18,13 @@ class ChatRequest(BaseModel):
     """Request body for chat endpoint."""
 
     message: str = Field(description="User input message")
+    conversation_id: str | None = Field(
+        default=None,
+        description=(
+            "Optional conversation identifier. "
+            "If omitted, server starts a new conversation."
+        ),
+    )
     max_attempts: int | None = Field(
         default=None, description="Optional verification retry cap override"
     )
@@ -25,6 +33,7 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     """Response body for chat endpoint."""
 
+    conversation_id: str
     intent: str | None
     verified: bool | None
     attempts: int
@@ -51,6 +60,7 @@ def create_app(*, container: AppContainer | None = None) -> FastAPI:
     """Create FastAPI app with injected or default container."""
     app_container = container or build_default_container()
     graph = app_container.build_graph()
+    repository = app_container.conversation_repository
 
     app = FastAPI(title="Weather Assistant API", version="0.1.0")
 
@@ -64,8 +74,11 @@ def create_app(*, container: AppContainer | None = None) -> FastAPI:
 
     @app.post("/chat", response_model=ChatResponse)
     def chat(payload: ChatRequest) -> ChatResponse:
+        conversation_id = payload.conversation_id or str(uuid4())
+        existing_state = repository.get(conversation_id)
+        prior_messages = existing_state["messages"] if existing_state is not None else []
         initial_state: GraphState = with_default_attempt_limits(
-            {"messages": [HumanMessage(content=payload.message)]},
+            {"messages": [*prior_messages, HumanMessage(content=payload.message)]},
             default_max_attempts=(
                 payload.max_attempts
                 if payload.max_attempts is not None
@@ -73,17 +86,25 @@ def create_app(*, container: AppContainer | None = None) -> FastAPI:
             ),
         )
         final_state = graph.invoke(initial_state)
+        repository.upsert(conversation_id, final_state)
         rendered_messages = _render_messages_for_response(final_state)
         ai_replies = [m["content"] for m in rendered_messages if m["role"] == "ai"]
         reply = ai_replies[-1] if ai_replies else ""
 
         return ChatResponse(
+            conversation_id=conversation_id,
             intent=final_state.get("intent"),
             verified=final_state.get("is_correct"),
             attempts=final_state.get("attempts", 0),
             reply=reply,
             messages=rendered_messages,
         )
+
+    @app.delete("/conversations/{conversation_id}")
+    def delete_conversation(conversation_id: str) -> dict[str, Any]:
+        existed = repository.get(conversation_id) is not None
+        repository.delete(conversation_id)
+        return {"conversation_id": conversation_id, "deleted": existed}
 
     return app
 

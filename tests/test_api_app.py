@@ -50,10 +50,14 @@ def test_chat_endpoint_weather_request() -> None:
     app = create_app(container=_test_container())
     client = TestClient(app)
 
-    response = client.post("/chat", json={"message": "What's the weather in London?"})
+    response = client.post(
+        "/chat",
+        json={"conversation_id": "conv-weather", "message": "What's the weather in London?"},
+    )
 
     assert response.status_code == 200
     payload = response.json()
+    assert payload["conversation_id"] == "conv-weather"
     assert payload["intent"] == "weather"
     assert payload["verified"] is True
     assert payload["attempts"] == 0
@@ -66,11 +70,62 @@ def test_chat_endpoint_out_of_scope_request() -> None:
     app = create_app(container=_test_container())
     client = TestClient(app)
 
-    response = client.post("/chat", json={"message": "Tell me a joke"})
+    response = client.post(
+        "/chat",
+        json={"conversation_id": "conv-oos", "message": "Tell me a joke"},
+    )
 
     assert response.status_code == 200
     payload = response.json()
+    assert payload["conversation_id"] == "conv-oos"
     assert payload["intent"] == "out_of_scope"
     assert payload["verified"] is True
     assert "only help with weather questions" in payload["reply"]
+
+
+def test_chat_endpoint_reuses_conversation_history() -> None:
+    app = create_app(container=_test_container())
+    client = TestClient(app)
+
+    first = client.post(
+        "/chat",
+        json={
+            "conversation_id": "conv-history",
+            "message": "What's the weather in London?",
+        },
+    )
+    second = client.post(
+        "/chat",
+        json={
+            "conversation_id": "conv-history",
+            "message": "And what about Tokyo?",
+        },
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    second_payload = second.json()
+    assert second_payload["conversation_id"] == "conv-history"
+    assert len(second_payload["messages"]) >= 4
+    assert any(
+        msg["role"] == "human" and "weather in London" in msg["content"]
+        for msg in second_payload["messages"]
+    )
+
+
+def test_delete_conversation_endpoint() -> None:
+    app = create_app(container=_test_container())
+    client = TestClient(app)
+
+    client.post(
+        "/chat",
+        json={"conversation_id": "conv-delete", "message": "What's the weather in London?"},
+    )
+    delete_response = client.delete("/conversations/conv-delete")
+    delete_again_response = client.delete("/conversations/conv-delete")
+
+    assert delete_response.status_code == 200
+    assert delete_response.json() == {"conversation_id": "conv-delete", "deleted": True}
+    assert delete_again_response.status_code == 200
+    assert delete_again_response.json() == {"conversation_id": "conv-delete", "deleted": False}
 
