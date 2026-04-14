@@ -7,7 +7,10 @@ from langchain_core.tools import BaseTool
 
 from weather_assistant.adapters.ai import AnthropicAssistantAIService
 from weather_assistant.adapters.graph import LangGraphWeatherWorkflow
-from weather_assistant.adapters.repositories import InMemoryConversationStateRepository
+from weather_assistant.adapters.repositories import (
+    InMemoryConversationStateRepository,
+    PostgresConversationStateRepository,
+)
 from weather_assistant.adapters.tools import get_weather
 from weather_assistant.config import WeatherAssistantSettings
 from weather_assistant.ports.assistant import AssistantAIServicePort
@@ -46,10 +49,20 @@ def build_default_container(
         temperature=resolved_settings.temperature,
     )
     resolved_tools = list(tools) if tools is not None else [get_weather]
+    conversation_repository = _build_repository(resolved_settings)
     return AppContainer(
         settings=resolved_settings,
         assistant=assistant,
         tools=resolved_tools,
-        conversation_repository=InMemoryConversationStateRepository(),
+        conversation_repository=conversation_repository,
     )
+
+
+def _build_repository(
+    settings: WeatherAssistantSettings,
+) -> ConversationStateRepositoryPort:
+    """Build repository adapter from runtime settings."""
+    if settings.database_url:
+        return PostgresConversationStateRepository(settings.database_url)
+    return InMemoryConversationStateRepository()
 

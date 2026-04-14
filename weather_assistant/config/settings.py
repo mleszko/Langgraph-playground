@@ -16,6 +16,7 @@ class WeatherAssistantSettings:
     model: str = DEFAULT_MODEL
     temperature: float = DEFAULT_TEMPERATURE
     default_max_attempts: int = DEFAULT_MAX_ATTEMPTS
+    database_url: str | None = None
 
     @classmethod
     def from_env(cls) -> "WeatherAssistantSettings":
@@ -42,9 +43,12 @@ class WeatherAssistantSettings:
         except ValueError:
             default_max_attempts = DEFAULT_MAX_ATTEMPTS
 
+        database_url = os.getenv("DATABASE_URL")
+
         return cls(
             model=model,
             temperature=temperature,
             default_max_attempts=default_max_attempts,
+            database_url=database_url or None,
         )
 
