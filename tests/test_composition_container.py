@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from langchain_core.messages import AIMessage, HumanMessage
 
+import weather_assistant.composition.container as container_module
+from weather_assistant.adapters.repositories import InMemoryConversationStateRepository
 from weather_assistant.composition import AppContainer, build_default_container
 from weather_assistant.config import WeatherAssistantSettings
 from weather_assistant.domain.models import VerificationDecision
@@ -25,24 +27,28 @@ def test_settings_from_env_uses_defaults(monkeypatch) -> None:
     monkeypatch.delenv("WEATHER_ASSISTANT_MODEL", raising=False)
     monkeypatch.delenv("WEATHER_ASSISTANT_TEMPERATURE", raising=False)
     monkeypatch.delenv("WEATHER_ASSISTANT_MAX_ATTEMPTS", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
 
     settings = WeatherAssistantSettings.from_env()
 
     assert settings.model == "claude-sonnet-4-6"
     assert settings.temperature == 0.0
     assert settings.default_max_attempts == 2
+    assert settings.database_url is None
 
 
 def test_settings_from_env_handles_invalid_values(monkeypatch) -> None:
     monkeypatch.setenv("WEATHER_ASSISTANT_MODEL", "custom-model")
     monkeypatch.setenv("WEATHER_ASSISTANT_TEMPERATURE", "not-a-float")
     monkeypatch.setenv("WEATHER_ASSISTANT_MAX_ATTEMPTS", "not-an-int")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://example")
 
     settings = WeatherAssistantSettings.from_env()
 
     assert settings.model == "custom-model"
     assert settings.temperature == 0.0
     assert settings.default_max_attempts == 2
+    assert settings.database_url == "postgresql://example"
 
 
 def test_default_container_uses_provided_settings() -> None:
@@ -55,6 +61,29 @@ def test_default_container_uses_provided_settings() -> None:
     assert len(container.tools) == 1
     assert container.tools[0].name == "get_weather"
     assert container.conversation_repository is not None
+    assert isinstance(container.conversation_repository, InMemoryConversationStateRepository)
+
+
+def test_default_container_uses_postgres_repository_when_database_url(monkeypatch) -> None:
+    settings = WeatherAssistantSettings(
+        model="claude-custom",
+        temperature=0.25,
+        default_max_attempts=4,
+        database_url="postgresql://example",
+    )
+
+    class FakePostgresRepository:
+        def __init__(self, dsn: str) -> None:
+            self.dsn = dsn
+
+    monkeypatch.setattr(
+        container_module, "PostgresConversationStateRepository", FakePostgresRepository
+    )
+
+    container = build_default_container(settings=settings)
+
+    assert isinstance(container.conversation_repository, FakePostgresRepository)
+    assert container.conversation_repository.dsn == "postgresql://example"
 
 
 def test_container_build_graph_with_dummy_assistant() -> None:

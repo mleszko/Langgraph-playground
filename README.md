@@ -89,6 +89,7 @@ Notes:
   - `WEATHER_ASSISTANT_MODEL` (default: `claude-sonnet-4-6`)
   - `WEATHER_ASSISTANT_TEMPERATURE` (default: `0.0`)
   - `WEATHER_ASSISTANT_MAX_ATTEMPTS` (default: `2`)
+  - `DATABASE_URL` (optional; when set, conversation state is stored in PostgreSQL)
 
 ## Run
 
@@ -115,6 +116,12 @@ Endpoints:
 - `GET /health`
 - `POST /chat`
 - `DELETE /conversations/{conversation_id}`
+
+Persistence behavior:
+
+- If `DATABASE_URL` is set, the service stores conversation state in PostgreSQL
+  (`conversation_state` table is auto-created).
+- If `DATABASE_URL` is not set, it falls back to in-memory storage.
 
 `POST /chat` request body:
 
@@ -185,7 +192,8 @@ For weather questions, the model may call `get_weather`, which returns mock weat
     ├── test_composition_container.py
     ├── test_domain_policies.py
     ├── test_graph_loop.py
-    └── test_in_memory_repository.py
+    ├── test_in_memory_repository.py
+    └── test_postgres_repository.py
 ```
 
 The root script is now a thin CLI entrypoint. Graph construction lives in
@@ -193,6 +201,6 @@ The root script is now a thin CLI entrypoint. Graph construction lives in
 `weather_assistant.adapters.ai.AnthropicAssistantAIService`, HTTP wiring lives in
 `weather_assistant.adapters.api.fastapi_app`, and runtime dependency wiring is handled by
 `weather_assistant.composition.AppContainer`. Conversation state persistence is abstracted through a
-repository port with an in-memory adapter, which keeps storage concerns swappable for a future
-production database in a microservice deployment.
+repository port with PostgreSQL and in-memory adapters, which keeps storage concerns swappable
+across environments in a microservice deployment.
 

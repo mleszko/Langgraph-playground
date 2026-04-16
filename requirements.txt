@@ -3,6 +3,7 @@ langchain-core
 langgraph
 fastapi
 httpx
+psycopg[binary]
 pydantic
 pytest
 python-dotenv
